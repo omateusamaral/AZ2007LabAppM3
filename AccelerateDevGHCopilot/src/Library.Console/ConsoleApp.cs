@@ -2,6 +2,7 @@
 using Library.ApplicationCore.Entities;
 using Library.ApplicationCore.Enums;
 using Library.Console;
+using Library.Infrastructure.Data;
 
 public class ConsoleApp
 {
@@ -17,12 +18,21 @@ public class ConsoleApp
     ILoanService _loanService;
     IPatronService _patronService;
 
-    public ConsoleApp(ILoanService loanService, IPatronService patronService, IPatronRepository patronRepository, ILoanRepository loanRepository)
+    JsonData _jsonData; // Add this field
+
+    public ConsoleApp(
+        ILoanService loanService,
+        IPatronService patronService,
+        IPatronRepository patronRepository,
+        ILoanRepository loanRepository,
+        JsonData jsonData // Add this parameter
+    )
     {
         _patronRepository = patronRepository;
         _loanRepository = loanRepository;
         _loanService = loanService;
         _patronService = patronService;
+        _jsonData = jsonData; // Assign it
     }
 
     public async Task Run()
@@ -193,7 +203,7 @@ public class ConsoleApp
             loanNumber++;
         }
 
-        CommonActions options = CommonActions.SearchPatrons | CommonActions.Quit | CommonActions.Select | CommonActions.RenewPatronMembership;
+        CommonActions options = CommonActions.SearchPatrons | CommonActions.Quit | CommonActions.Select | CommonActions.RenewPatronMembership | CommonActions.SearchBooks;
         CommonActions action = ReadInputOptions(options, out int selectedLoanNumber);
         if (action == CommonActions.Select)
         {
@@ -225,9 +235,86 @@ public class ConsoleApp
             selectedPatronDetails = (await _patronRepository.GetPatron(selectedPatronDetails.Id))!;
             return ConsoleState.PatronDetails;
         }
+        else if (action == CommonActions.SearchBooks)
+        {
+            await SearchBooks();
+            return ConsoleState.PatronDetails;
+        }
 
         throw new InvalidOperationException("An input option is not handled.");
     }
+
+    async Task<ConsoleState> SearchBooks()
+    {
+        string? bookTitle = null;
+        while (string.IsNullOrWhiteSpace(bookTitle))
+        {
+            Console.Write("Enter a book title to search for: ");
+            bookTitle = Console.ReadLine();
+        }
+
+        await _jsonData.EnsureDataLoaded();
+
+        // Find the book by title (case-insensitive)
+        var book = _jsonData.Books?.FirstOrDefault(b => b.Title.Equals(bookTitle, StringComparison.OrdinalIgnoreCase));
+        if (book == null)
+        {
+            Console.WriteLine($"No book found with the title \"{bookTitle}\".");
+            return ConsoleState.PatronDetails;
+        }
+
+        // Find all book items for this book
+        var bookItems = _jsonData.BookItems?.Where(bi => bi.BookId == book.Id).ToList();
+        if (bookItems == null || bookItems.Count == 0)
+        {
+            Console.WriteLine($"No physical copies found for \"{book.Title}\".");
+            return ConsoleState.PatronDetails;
+        }
+
+        // Find all loans for these book items
+        var loans = _jsonData.Loans?.Where(l => bookItems.Any(bi => bi.Id == l.BookItemId)).ToList();
+
+        // Check if any book item is available (never loaned or returned)
+        bool available = false;
+        foreach (var bookItem in bookItems)
+        {
+            var itemLoans = loans?.Where(l => l.BookItemId == bookItem.Id).ToList();
+            if (itemLoans == null || itemLoans.Count == 0)
+            {
+                available = true;
+                break;
+            }
+            // If all loans for this item have ReturnDate != null, it's available
+            if (itemLoans.All(l => l.ReturnDate != null))
+            {
+                available = true;
+                break;
+            }
+        }
+
+        if (available)
+        {
+            Console.WriteLine($"\"{book.Title}\" is available for loan.");
+        }
+        else
+        {
+            // Find the current loan (ReturnDate == null) with the soonest DueDate
+            var currentLoan = loans?.Where(l => l.ReturnDate == null)
+                                    .OrderBy(l => l.DueDate)
+                                    .FirstOrDefault();
+            if (currentLoan != null)
+            {
+                Console.WriteLine($"\"{book.Title}\" is on loan to another patron. The return due date is {currentLoan.DueDate}.");
+            }
+            else
+            {
+                Console.WriteLine($"\"{book.Title}\" is not currently available.");
+            }
+        }
+
+        return ConsoleState.PatronDetails;
+    }
+
 
     async Task<ConsoleState> LoanDetails()
     {

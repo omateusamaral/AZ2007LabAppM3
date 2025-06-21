@@ -18,7 +18,7 @@ services.AddScoped<ILoanService, LoanService>();
 services.AddScoped<IPatronService, PatronService>();
 
 services.AddSingleton<JsonData>();
-services.AddSingleton<ConsoleApp>();
+services.AddSingleton<ConsoleApp>(); // This will now inject JsonData as well
 
 var servicesProvider = services.BuildServiceProvider();
 
